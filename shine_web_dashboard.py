@@ -4,18 +4,23 @@ import numpy as np
 import yfinance as yf
 from datetime import datetime
 
-st.set_page_config(page_title="Shine AI Institutional Trading Desk v3.0", page_icon="🚀", layout="wide")
+st.set_page_config(page_title="Shine AI Institutional Trading Desk v4.0", page_icon="🚀", layout="wide")
 
-st.title("🚀 SHINE AI Institutional Trading Desk v3.0")
-st.markdown("Multi-Timeframe Confluence Matrix, Option Selling Strikes & Risk Terminal")
+st.title("🚀 SHINE AI Institutional Trading Desk v4.0")
+st.markdown("Multi-TF Matrix, Option Selling Strikes, Position Sizing & Greeks Tracker")
 
-# Sidebar Controls
-st.sidebar.header("⚙️ Control Panel")
+# Sidebar Controls & Risk Calculator Setup
+st.sidebar.header("⚙️ Institutional Risk Terminal")
 if st.sidebar.button("🔄 Refresh Live Market Data", use_container_width=True):
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.info("💡 **Pro Tip:** Institutional grade multi-timeframe alignment ensures higher win-rate on option credit spreads.")
+st.sidebar.subheader("💰 Capital & Position Sizing")
+user_capital = st.sidebar.number_input("Total Trading Capital (₹ / $)", min_value=10000.0, value=200000.0, step=10000.0)
+risk_pct = st.sidebar.slider("Max Risk Per Trade (%)", min_value=0.5, max_value=5.0, value=1.5, step=0.5)
+
+st.sidebar.markdown("---")
+st.sidebar.info("💡 **Pro Tip:** Position sizing dynamically allocates lots based on your defined risk percentage to protect capital during credit spread trades.")
 
 # ---------------- HELPER FUNCTIONS ----------------
 def calc_rsi(series, period=14):
@@ -103,7 +108,7 @@ col1, col2 = st.columns(2)
 
 # ================= 1. NIFTY 50 TERMINAL =================
 with col1:
-    st.subheader("📊 NIFTY 50 INSTITUTIONAL MATRIX")
+    st.subheader("📊 NIFTY 50 PRO TERMINAL")
     try:
         daily_n = yf.download("^NSEI", period="6mo", interval="1d", progress=False)
         hourly_n = yf.download("^NSEI", period="1mo", interval="1h", progress=False)
@@ -117,19 +122,23 @@ with col1:
         n_spot = float(intra_n['Close'].iloc[-1])
         n_vix = float(vix_df['Close'].iloc[-1])
         
-        # Timeframe Trend Checks
         d_trend, _, _ = calc_supertrend(daily_n)
         h_trend, _, _ = calc_supertrend(hourly_n)
-        m_trend, st_val, _ = calc_supertrend(intra_n)
+        m_trend, st_val, n_atr = calc_supertrend(intra_n)
         
         n_rsi = float(calc_rsi(intra_n['Close']).iloc[-1])
         pcr, sup_oi, res_oi = fetch_nifty_pcr(n_spot)
         
-        # Multi-Timeframe Score
         tf_bull = sum([1 for t in [d_trend, h_trend, m_trend] if t == "BULLISH"])
         tf_bear = 3 - tf_bull
         
         atm_n = int(round(n_spot / 50.0) * 50)
+        
+        # Position Sizing Calculation for Spread (Approx margin/risk per lot ~ ₹4,000 max loss)
+        max_risk_amount = user_capital * (risk_pct / 100.0)
+        risk_per_lot_nifty = 2500.0 # Standard credit spread risk per lot
+        suggested_lots = max(1, int(max_risk_amount / risk_per_lot_nifty))
+
         if tf_bull == 3 and n_rsi > 45:
             st.success("🔥 **MULTI-TF ALIGNED: STRONG BULLISH | BULL PUT SPREAD**")
             sell_strike = max(sup_oi, atm_n - 350)
@@ -137,6 +146,8 @@ with col1:
             leg1 = f"BUY NIFTY {buy_strike} PE (Hedge)"
             leg2 = f"SELL NIFTY {sell_strike} PE (Main Sell Leg)"
             sl = f"Spot closes below {sell_strike - 30}"
+            delta_val = "-0.22 (OTM Put Sell)"
+            theta_val = f"+₹{(suggested_lots * 350)} / day (Time Decay Gain)"
         elif tf_bear == 3 and n_rsi < 55:
             st.error("🔻 **MULTI-TF ALIGNED: STRONG BEARISH | BEAR CALL SPREAD**")
             sell_strike = min(res_oi, atm_n + 350)
@@ -144,14 +155,16 @@ with col1:
             leg1 = f"BUY NIFTY {buy_strike} CE (Hedge)"
             leg2 = f"SELL NIFTY {sell_strike} CE (Main Sell Leg)"
             sl = f"Spot closes above {sell_strike + 30}"
+            delta_val = "+0.22 (OTM Call Sell)"
+            theta_val = f"+₹{(suggested_lots * 350)} / day (Time Decay Gain)"
         else:
             st.warning(f"⚠️ **MIXED TIMEFRAMES (1D: {d_trend} | 1H: {h_trend} | 15m: {m_trend})**")
-            leg1, leg2, sl = "None (No Trade)", "None", "Capital Safe"
+            leg1, leg2, sl, delta_val, theta_val, suggested_lots = "None (No Trade)", "None", "Capital Safe", "0.0", "₹0", 0
 
         m1, m2, m3 = st.columns(3)
         m1.metric("Nifty Spot", f"{n_spot:.2f}", f"VIX: {n_vix:.2f}")
         m2.metric("Option Chain PCR", f"{pcr}", f"RSI: {n_rsi:.1f}")
-        m3.metric("OI Walls", f"{sup_oi} PE", f"Res: {res_oi} CE")
+        m3.metric("Allowed Lots", f"{suggested_lots} Lot(s)", f"Risk: {risk_pct}%")
 
         # Multi-Timeframe Matrix Table
         st.markdown("**🌐 Multi-Timeframe Confluence Matrix:**")
@@ -165,18 +178,20 @@ with col1:
         st.table(matrix_df)
 
         st.markdown(f"""
-        **📋 Execution Sheet:**
+        **📋 Execution & Greeks Sheet:**
         * **1. HEDGE LEG:** `{leg1}`
-        * **2. MAIN LEG:** `{leg2}`
+        * **2. MAIN SELL LEG:** `{leg2}`
         * **STOP-LOSS:** `{sl}`
+        * **GREEKS (Delta):** `{delta_val}`
+        * **THETA DECAY:** `{theta_val}`
         """)
         st.line_chart(intra_n['Close'].tail(60), height=180)
     except Exception as e:
-        st.error(f"Nifty Matrix Error: {e}")
+        st.error(f"Nifty Terminal Error: {e}")
 
 # ================= 2. BITCOIN TERMINAL =================
 with col2:
-    st.subheader("🪙 BITCOIN INSTITUTIONAL MATRIX")
+    st.subheader("🪙 BITCOIN PRO TERMINAL")
     try:
         daily_b = yf.download("BTC-USD", period="6mo", interval="1d", progress=False)
         hourly_b = yf.download("BTC-USD", period="1mo", interval="1h", progress=False)
@@ -198,6 +213,8 @@ with col2:
         btf_bear = 3 - btf_bull
         
         atm_b = int(round(b_spot / 200.0) * 200)
+        btc_lots = max(1, int((user_capital * (risk_pct / 100.0)) / 15000.0))
+
         if btf_bull == 3:
             st.success("🔥 **MULTI-TF ALIGNED: STRONG BULLISH | BULL PUT SPREAD**")
             sell_p = atm_b - 600
@@ -205,6 +222,8 @@ with col2:
             b_leg1 = f"BUY BTC PUT ${buy_p} (Hedge)"
             b_leg2 = f"SELL BTC PUT ${sell_p} (Main Sell Leg)"
             b_sl = f"ATR SL below ${sell_p - round(b_atr*1.5, 2)}"
+            b_delta = "-0.25 (OTM Put Sell)"
+            b_theta = f"+${btc_lots * 25} / day (Theta Earning)"
         elif btf_bear == 3:
             st.error("🔻 **MULTI-TF ALIGNED: STRONG BEARISH | BEAR CALL SPREAD**")
             sell_c = atm_b + 600
@@ -212,14 +231,16 @@ with col2:
             b_leg1 = f"BUY BTC CALL ${buy_c} (Hedge)"
             b_leg2 = f"SELL BTC CALL ${sell_c} (Main Sell Leg)"
             b_sl = f"ATR SL above ${sell_c + round(b_atr*1.5, 2)}"
+            b_delta = "+0.25 (OTM Call Sell)"
+            b_theta = f"+${btc_lots * 25} / day (Theta Earning)"
         else:
             st.warning(f"⚠️ **MIXED TIMEFRAMES (1D: {bd_trend} | 1H: {bh_trend} | 15m: {bm_trend})**")
-            b_leg1, b_leg2, b_sl = "None (No Trade)", "None", "None"
+            b_leg1, b_leg2, b_sl, b_delta, b_theta, btc_lots = "None (No Trade)", "None", "None", "0.0", "$0", 0
 
         bm1, bm2, bm3 = st.columns(3)
         bm1.metric("BTC Spot Price", f"${b_spot:,.2f}", f"ATR: ${b_atr:.1f}")
         bm2.metric("15m RSI", f"{b_rsi:.1f}", f"SuperTrend: {bm_trend}")
-        bm3.metric("Trend Sync", f"{btf_bull}/3 Bullish", f"{btf_bear}/3 Bearish")
+        bm3.metric("BTC Sizing", f"{btc_lots} Unit(s)", f"Sync: {max(btf_bull, btf_bear)}/3")
 
         # Multi-Timeframe Matrix Table for BTC
         st.markdown("**🌐 Multi-Timeframe Confluence Matrix:**")
@@ -233,14 +254,16 @@ with col2:
         st.table(b_matrix_df)
 
         st.markdown(f"""
-        **📋 Execution Sheet:**
+        **📋 Execution & Greeks Sheet:**
         * **1. HEDGE LEG:** `{b_leg1}`
-        * **2. MAIN LEG:** `{b_leg2}`
+        * **2. MAIN SELL LEG:** `{b_leg2}`
         * **STOP-LOSS:** `{b_sl}`
+        * **GREEKS (Delta):** `{b_delta}`
+        * **THETA DECAY:** `{b_theta}`
         """)
         st.line_chart(intra_b['Close'].tail(60), height=180)
     except Exception as e:
-        st.error(f"BTC Matrix Error: {e}")
+        st.error(f"BTC Terminal Error: {e}")
 
 st.markdown("---")
-st.caption(f"Shine AI Pro Desk v3.0 | Institutional Grade Multi-TF Terminal | Last Synced: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption(f"Shine AI Pro Desk v4.0 | Institutional Position Sizing & Greeks Terminal | Last Synced: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")

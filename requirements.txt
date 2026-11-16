@@ -1,0 +1,5 @@
+streamlit
+yfinance
+pandas
+numpy
+curl_cffi

@@ -2,12 +2,13 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
+import plotly.graph_objects as go
 from datetime import datetime
 
-st.set_page_config(page_title="Shine AI Institutional Trading Desk v4.0", page_icon="🚀", layout="wide")
+st.set_page_config(page_title="Shine AI Institutional Trading Desk v5.0", page_icon="🚀", layout="wide")
 
-st.title("🚀 SHINE AI Institutional Trading Desk v4.0")
-st.markdown("Multi-TF Matrix, Option Selling Strikes, Position Sizing & Greeks Tracker")
+st.title("🚀 SHINE AI Institutional Trading Desk v5.0")
+st.markdown("Multi-TF Matrix, Live Candlesticks, Option Selling Strikes, Position Sizing & Greeks")
 
 # Sidebar Controls & Risk Calculator Setup
 st.sidebar.header("⚙️ Institutional Risk Terminal")
@@ -16,11 +17,11 @@ if st.sidebar.button("🔄 Refresh Live Market Data", use_container_width=True):
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("💰 Capital & Position Sizing")
-user_capital = st.sidebar.number_input("Total Trading Capital (₹ / $)", min_value=10000.0, value=200000.0, step=10000.0)
+user_capital = st.sidebar.number_input("Total Trading Capital (₹ / $)", min_value=10000.0, value=300000.0, step=10000.0)
 risk_pct = st.sidebar.slider("Max Risk Per Trade (%)", min_value=0.5, max_value=5.0, value=1.5, step=0.5)
 
 st.sidebar.markdown("---")
-st.sidebar.info("💡 **Pro Tip:** Position sizing dynamically allocates lots based on your defined risk percentage to protect capital during credit spread trades.")
+st.sidebar.info("💡 **Pro Tip:** Hover over the candlestick chart to inspect exact Open, High, Low, Close (OHLC), EMA-20, and SuperTrend levels.")
 
 # ---------------- HELPER FUNCTIONS ----------------
 def calc_rsi(series, period=14):
@@ -65,7 +66,58 @@ def calc_supertrend(df, period=10, multiplier=3):
                 ub[i] = ub[i-1]
         st_val[i] = lb[i] if st_dir[i] else ub[i]
         
-    return ("BULLISH" if st_dir[-1] else "BEARISH"), float(st_val[-1]), float(atr.iloc[-1])
+    df_st = pd.Series(st_val, index=df.index)
+    return ("BULLISH" if st_dir[-1] else "BEARISH"), float(st_val[-1]), float(atr.iloc[-1]), df_st
+
+def plot_candlestick(df, st_series, title):
+    sub_df = df.tail(45).copy()
+    sub_st = st_series.tail(45)
+    sub_df['EMA20'] = sub_df['Close'].ewm(span=20, adjust=False).mean()
+    
+    fig = go.Figure()
+    
+    # 1. Candlesticks
+    fig.add_trace(go.Candlestick(
+        x=sub_df.index,
+        open=sub_df['Open'],
+        high=sub_df['High'],
+        low=sub_df['Low'],
+        close=sub_df['Close'],
+        name="Price",
+        increasing_line_color='#00ff88',
+        decreasing_line_color='#ff3355'
+    ))
+    
+    # 2. EMA 20 Line
+    fig.add_trace(go.Scatter(
+        x=sub_df.index,
+        y=sub_df['EMA20'],
+        mode='lines',
+        name='EMA 20',
+        line=dict(color='#00bfff', width=1.5)
+    ))
+    
+    # 3. SuperTrend Line
+    fig.add_trace(go.Scatter(
+        x=sub_df.index,
+        y=sub_st,
+        mode='lines',
+        name='SuperTrend',
+        line=dict(color='#ffaa00', width=1.8, dash='dot')
+    ))
+    
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=14)),
+        height=340,
+        margin=dict(l=10, r=10, t=35, b=10),
+        xaxis_rangeslider_visible=False,
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(15,18,24,0.85)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    fig.update_xaxes(type='category', nticks=8, showgrid=False)
+    return fig
 
 def fetch_nifty_pcr(spot_price):
     atm = int(round(spot_price / 50.0) * 50)
@@ -122,9 +174,9 @@ with col1:
         n_spot = float(intra_n['Close'].iloc[-1])
         n_vix = float(vix_df['Close'].iloc[-1])
         
-        d_trend, _, _ = calc_supertrend(daily_n)
-        h_trend, _, _ = calc_supertrend(hourly_n)
-        m_trend, st_val, n_atr = calc_supertrend(intra_n)
+        d_trend, _, _, _ = calc_supertrend(daily_n)
+        h_trend, _, _, _ = calc_supertrend(hourly_n)
+        m_trend, st_val, n_atr, n_st_series = calc_supertrend(intra_n)
         
         n_rsi = float(calc_rsi(intra_n['Close']).iloc[-1])
         pcr, sup_oi, res_oi = fetch_nifty_pcr(n_spot)
@@ -133,10 +185,8 @@ with col1:
         tf_bear = 3 - tf_bull
         
         atm_n = int(round(n_spot / 50.0) * 50)
-        
-        # Position Sizing Calculation for Spread (Approx margin/risk per lot ~ ₹4,000 max loss)
         max_risk_amount = user_capital * (risk_pct / 100.0)
-        risk_per_lot_nifty = 2500.0 # Standard credit spread risk per lot
+        risk_per_lot_nifty = 2500.0
         suggested_lots = max(1, int(max_risk_amount / risk_per_lot_nifty))
 
         if tf_bull == 3 and n_rsi > 45:
@@ -166,7 +216,12 @@ with col1:
         m2.metric("Option Chain PCR", f"{pcr}", f"RSI: {n_rsi:.1f}")
         m3.metric("Allowed Lots", f"{suggested_lots} Lot(s)", f"Risk: {risk_pct}%")
 
-        # Multi-Timeframe Matrix Table
+        # Live Candlestick Chart
+        intra_n_plot = intra_n.copy()
+        intra_n_plot.index = intra_n_plot.index.strftime('%d %b %H:%M')
+        n_st_series.index = intra_n_plot.index
+        st.plotly_chart(plot_candlestick(intra_n_plot, n_st_series, "Nifty 50 — 15m Live Candlesticks (with EMA20 & SuperTrend)"), use_container_width=True)
+
         st.markdown("**🌐 Multi-Timeframe Confluence Matrix:**")
         matrix_df = pd.DataFrame({
             "Timeframe": ["Daily (1D)", "Hourly (1H)", "Intraday (15m)"],
@@ -185,7 +240,6 @@ with col1:
         * **GREEKS (Delta):** `{delta_val}`
         * **THETA DECAY:** `{theta_val}`
         """)
-        st.line_chart(intra_n['Close'].tail(60), height=180)
     except Exception as e:
         st.error(f"Nifty Terminal Error: {e}")
 
@@ -203,9 +257,9 @@ with col2:
                 
         b_spot = float(intra_b['Close'].iloc[-1])
         
-        bd_trend, _, _ = calc_supertrend(daily_b)
-        bh_trend, _, _ = calc_supertrend(hourly_b)
-        bm_trend, b_st_val, b_atr = calc_supertrend(intra_b)
+        bd_trend, _, _, _ = calc_supertrend(daily_b)
+        bh_trend, _, _, _ = calc_supertrend(hourly_b)
+        bm_trend, b_st_val, b_atr, b_st_series = calc_supertrend(intra_b)
         
         b_rsi = float(calc_rsi(intra_b['Close']).iloc[-1])
         
@@ -242,7 +296,12 @@ with col2:
         bm2.metric("15m RSI", f"{b_rsi:.1f}", f"SuperTrend: {bm_trend}")
         bm3.metric("BTC Sizing", f"{btc_lots} Unit(s)", f"Sync: {max(btf_bull, btf_bear)}/3")
 
-        # Multi-Timeframe Matrix Table for BTC
+        # Live Candlestick Chart for BTC
+        intra_b_plot = intra_b.copy()
+        intra_b_plot.index = intra_b_plot.index.strftime('%d %b %H:%M')
+        b_st_series.index = intra_b_plot.index
+        st.plotly_chart(plot_candlestick(intra_b_plot, b_st_series, "Bitcoin (BTC) — 15m Live Candlesticks (with EMA20 & SuperTrend)"), use_container_width=True)
+
         st.markdown("**🌐 Multi-Timeframe Confluence Matrix:**")
         b_matrix_df = pd.DataFrame({
             "Timeframe": ["Daily (1D)", "Hourly (1H)", "Intraday (15m)"],
@@ -261,22 +320,8 @@ with col2:
         * **GREEKS (Delta):** `{b_delta}`
         * **THETA DECAY:** `{b_theta}`
         """)
-        st.line_chart(intra_b['Close'].tail(60), height=180)
     except Exception as e:
         st.error(f"BTC Terminal Error: {e}")
 
 st.markdown("---")
-st.caption(f"Shine AI Pro Desk v4.0 | Institutional Position Sizing & Greeks Terminal | Last Synced: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-import streamlit as st
-import pandas as pd
-import numpy as np
-import yfinance as yf
-import altair as alt
-from datetime import datetime
-
-st.set_page_config(page_title="Shine AI Institutional Trading Desk v4.1", page_icon="🚀", layout="wide")
-
-st.title("🚀 SHINE AI Institutional Trading Desk v4.1")
-st.markdown("Multi-TF Matrix, Option Selling Strikes, Position Sizing & Greeks Tracker")
-
-st.sidebar.header
+st.caption(f"Shine AI Pro Desk v5.0 | Institutional Candlestick & Greeks Terminal | Last Synced: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")

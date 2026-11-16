@@ -7,12 +7,11 @@ import requests
 import time
 from datetime import datetime
 
-st.set_page_config(page_title="Shine AI Institutional Trading Desk v6.0", page_icon="🚀", layout="wide")
+st.set_page_config(page_title="Shine AI Institutional Trading Desk v6.1", page_icon="🚀", layout="wide")
 
-st.title("🚀 SHINE AI Institutional Trading Desk v6.0")
-st.markdown("Multi-TF Matrix, Live Candlesticks, Position Sizing, Greeks & Telegram Alert Switch")
+st.title("🚀 SHINE AI Institutional Trading Desk v6.1")
+st.markdown("Multi-TF Matrix, Live Candlesticks, Position Sizing, Greeks & Always-ON Telegram Alert")
 
-# Session State for Duplicate Alert Prevention
 if "last_alert_sig" not in st.session_state:
     st.session_state.last_alert_sig = ""
 
@@ -24,21 +23,20 @@ if st.sidebar.button("🔄 Refresh Live Market Data", use_container_width=True):
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔔 Telegram Alert Control")
 
-# ON / OFF Toggle Switch
-tg_enabled = st.sidebar.toggle("Enable Live Telegram Alerts (ON/OFF)", value=False)
-auto_scan = st.sidebar.toggle("⏱️ Auto-Scan Every 15 Mins", value=False, help="Keeps scanning market every 15 mins and pushes Telegram alerts when ON.")
+# BY DEFAULT ON (value=True) — Refresh hone par bhi ON rahega!
+tg_enabled = st.sidebar.toggle("Enable Live Telegram Alerts (ON/OFF)", value=True)
+auto_scan = st.sidebar.toggle("⏱️ Auto-Scan Every 15 Mins", value=True, help="Keeps scanning market every 15 mins and pushes Telegram alerts when ON.")
 
-with st.sidebar.expander("🔑 Telegram Bot Setup", expanded=tg_enabled):
-    # Pre-fills from Streamlit Secrets if configured, else user can enter directly
+with st.sidebar.expander("🔑 Telegram Bot Setup", expanded=False):
     default_token = st.secrets.get("TELEGRAM_BOT_TOKEN", "") if "TELEGRAM_BOT_TOKEN" in st.secrets else ""
-    default_chat = st.secrets.get("TELEGRAM_CHAT_ID", "") if "TELEGRAM_CHAT_ID" in st.secrets else ""
+    default_chat = st.secrets.get("TELEGRAM_CHAT_ID", "8085621728") if "TELEGRAM_CHAT_ID" in st.secrets else "8085621728"
     
-    tg_token = st.text_input("Telegram Bot Token", value=default_token, type="password", placeholder="Paste Bot Token here...")
-    tg_chat_id = st.text_input("Telegram Chat ID", value=default_chat, placeholder="Paste Chat ID here...")
+    tg_token = st.text_input("Telegram Bot Token", value=default_token, type="password", placeholder="Paste Bot Token in Streamlit Secrets...")
+    tg_chat_id = st.text_input("Telegram Chat ID", value=default_chat)
 
 def send_telegram_alert(message):
     if not tg_token or not tg_chat_id:
-        return False, "Bot Token or Chat ID missing!"
+        return False, "Bot Token missing! Please save TELEGRAM_BOT_TOKEN in Streamlit Settings -> Secrets."
     url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
     payload = {
         "chat_id": tg_chat_id,
@@ -358,7 +356,7 @@ with col2:
         st.markdown(f"""
         **📋 Execution & Greeks Sheet:**
         * **1. HEDGE LEG:** `{b_leg1}`
-        * **2. MAIN SELL LEG:** `{b_leg2}`
+        * **2. MAIN SELL LEG:** `{leg2 if 'leg2' in locals() else b_leg2}`
         * **STOP-LOSS:** `{b_sl}`
         * **GREEKS (Delta):** `{b_delta}`
         * **THETA DECAY:** `{b_theta}`
@@ -369,9 +367,8 @@ with col2:
 # ---------------- TELEGRAM DISPATCH ENGINE ----------------
 if tg_enabled:
     st.sidebar.success("🟢 Telegram Alerts: ACTIVE")
-    combined_msg = f"🚀 *SHINE AI DESK v6.0 LIVE REPORT*\n\n{nifty_alert_msg}\n\n{btc_alert_msg}\n\n⏱️ _Time: {datetime.now().strftime('%d %b %H:%M:%S')}_"
+    combined_msg = f"🚀 *SHINE AI DESK v6.1 LIVE REPORT*\n\n{nifty_alert_msg}\n\n{btc_alert_msg}\n\n⏱️ _Time: {datetime.now().strftime('%d %b %H:%M:%S')}_"
     
-    # 1. Manual Instant Push Button
     if st.sidebar.button("📲 Send Instant Telegram Snapshot", use_container_width=True):
         ok, info = send_telegram_alert(combined_msg)
         if ok:
@@ -380,7 +377,6 @@ if tg_enabled:
         else:
             st.sidebar.error(info)
             
-    # 2. Automatic Push on Aligned Signal
     curr_sig_key = f"{n_signal_status}_{b_signal_status}"
     if (n_signal_status != "MIXED" or b_signal_status != "MIXED") and st.session_state.last_alert_sig != curr_sig_key:
         ok, info = send_telegram_alert(combined_msg)
@@ -391,9 +387,8 @@ else:
     st.sidebar.warning("🔴 Telegram Alerts: OFF")
 
 st.markdown("---")
-st.caption(f"Shine AI Pro Desk v6.0 | Institutional Candlestick, Greeks & Telegram Terminal | Last Synced: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption(f"Shine AI Pro Desk v6.1 | Always-ON Telegram Terminal | Last Synced: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-# Auto-Scan Loop when enabled
 if auto_scan:
-    time.sleep(900) # 15 minutes (900 seconds)
+    time.sleep(900)
     st.rerun()

@@ -7,13 +7,17 @@ import requests
 import time
 from datetime import datetime
 
-st.set_page_config(page_title="Shine AI Institutional Trading Desk v6.1", page_icon="🚀", layout="wide")
+st.set_page_config(page_title="Shine AI Institutional Trading Desk v6.2", page_icon="🚀", layout="wide")
 
-st.title("🚀 SHINE AI Institutional Trading Desk v6.1")
-st.markdown("Multi-TF Matrix, Live Candlesticks, Position Sizing, Greeks & Always-ON Telegram Alert")
+st.title("🚀 SHINE AI Institutional Trading Desk v6.2")
+st.markdown("Multi-TF Matrix, Live Candlesticks, Position Sizing, Greeks & Smart Anti-Spam Telegram Alert")
 
-if "last_alert_sig" not in st.session_state:
-    st.session_state.last_alert_sig = ""
+# GLOBAL SERVER LOCK — Page refresh ya mobile reconnect par bhi duplicate alert nahi aane dega!
+@st.cache_resource
+def get_global_alert_tracker():
+    return {"last_sig": "", "last_time": 0.0}
+
+alert_tracker = get_global_alert_tracker()
 
 # ---------------- SIDEBAR CONTROLS ----------------
 st.sidebar.header("⚙️ Institutional Risk Terminal")
@@ -23,9 +27,8 @@ if st.sidebar.button("🔄 Refresh Live Market Data", use_container_width=True):
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔔 Telegram Alert Control")
 
-# BY DEFAULT ON (value=True) — Refresh hone par bhi ON rahega!
 tg_enabled = st.sidebar.toggle("Enable Live Telegram Alerts (ON/OFF)", value=True)
-auto_scan = st.sidebar.toggle("⏱️ Auto-Scan Every 15 Mins", value=True, help="Keeps scanning market every 15 mins and pushes Telegram alerts when ON.")
+auto_scan = st.sidebar.toggle("⏱️ Auto-Scan Every 15 Mins", value=True, help="Scans market every 15 mins and pushes alert ONLY when signal changes.")
 
 with st.sidebar.expander("🔑 Telegram Bot Setup", expanded=False):
     default_token = st.secrets.get("TELEGRAM_BOT_TOKEN", "") if "TELEGRAM_BOT_TOKEN" in st.secrets else ""
@@ -356,7 +359,7 @@ with col2:
         st.markdown(f"""
         **📋 Execution & Greeks Sheet:**
         * **1. HEDGE LEG:** `{b_leg1}`
-        * **2. MAIN SELL LEG:** `{leg2 if 'leg2' in locals() else b_leg2}`
+        * **2. MAIN SELL LEG:** `{b_leg2}`
         * **STOP-LOSS:** `{b_sl}`
         * **GREEKS (Delta):** `{b_delta}`
         * **THETA DECAY:** `{b_theta}`
@@ -364,11 +367,12 @@ with col2:
     except Exception as e:
         st.error(f"BTC Terminal Error: {e}")
 
-# ---------------- TELEGRAM DISPATCH ENGINE ----------------
+# ---------------- SMART ANTI-SPAM TELEGRAM DISPATCH ENGINE ----------------
 if tg_enabled:
-    st.sidebar.success("🟢 Telegram Alerts: ACTIVE")
-    combined_msg = f"🚀 *SHINE AI DESK v6.1 LIVE REPORT*\n\n{nifty_alert_msg}\n\n{btc_alert_msg}\n\n⏱️ _Time: {datetime.now().strftime('%d %b %H:%M:%S')}_"
+    st.sidebar.success("🟢 Telegram Alerts: ACTIVE (Anti-Spam Lock ON)")
+    combined_msg = f"🚀 *SHINE AI DESK v6.2 LIVE REPORT*\n\n{nifty_alert_msg}\n\n{btc_alert_msg}\n\n⏱️ _Time: {datetime.now().strftime('%d %b %H:%M:%S')}_"
     
+    # 1. Manual Button (Always sends immediately when clicked)
     if st.sidebar.button("📲 Send Instant Telegram Snapshot", use_container_width=True):
         ok, info = send_telegram_alert(combined_msg)
         if ok:
@@ -377,17 +381,22 @@ if tg_enabled:
         else:
             st.sidebar.error(info)
             
+    # 2. Smart Auto-Push: Only sends when Signal Changes AND 15-min Cooldown has passed
     curr_sig_key = f"{n_signal_status}_{b_signal_status}"
-    if (n_signal_status != "MIXED" or b_signal_status != "MIXED") and st.session_state.last_alert_sig != curr_sig_key:
-        ok, info = send_telegram_alert(combined_msg)
-        if ok:
-            st.session_state.last_alert_sig = curr_sig_key
-            st.sidebar.info("📨 Auto-Alert Dispatched to Telegram!")
+    now_ts = time.time()
+    
+    if (n_signal_status != "MIXED" or b_signal_status != "MIXED"):
+        if alert_tracker["last_sig"] != curr_sig_key and (now_ts - alert_tracker["last_time"]) > 900:
+            ok, info = send_telegram_alert(combined_msg)
+            if ok:
+                alert_tracker["last_sig"] = curr_sig_key
+                alert_tracker["last_time"] = now_ts
+                st.sidebar.info("📨 New Signal Auto-Alert Dispatched!")
 else:
     st.sidebar.warning("🔴 Telegram Alerts: OFF")
 
 st.markdown("---")
-st.caption(f"Shine AI Pro Desk v6.1 | Always-ON Telegram Terminal | Last Synced: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption(f"Shine AI Pro Desk v6.2 | Anti-Spam Telegram Terminal | Last Synced: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 if auto_scan:
     time.sleep(900)

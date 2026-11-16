@@ -3,25 +3,61 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import plotly.graph_objects as go
+import requests
+import time
 from datetime import datetime
 
-st.set_page_config(page_title="Shine AI Institutional Trading Desk v5.0", page_icon="🚀", layout="wide")
+st.set_page_config(page_title="Shine AI Institutional Trading Desk v6.0", page_icon="🚀", layout="wide")
 
-st.title("🚀 SHINE AI Institutional Trading Desk v5.0")
-st.markdown("Multi-TF Matrix, Live Candlesticks, Option Selling Strikes, Position Sizing & Greeks")
+st.title("🚀 SHINE AI Institutional Trading Desk v6.0")
+st.markdown("Multi-TF Matrix, Live Candlesticks, Position Sizing, Greeks & Telegram Alert Switch")
 
-# Sidebar Controls & Risk Calculator Setup
+# Session State for Duplicate Alert Prevention
+if "last_alert_sig" not in st.session_state:
+    st.session_state.last_alert_sig = ""
+
+# ---------------- SIDEBAR CONTROLS ----------------
 st.sidebar.header("⚙️ Institutional Risk Terminal")
 if st.sidebar.button("🔄 Refresh Live Market Data", use_container_width=True):
     st.rerun()
 
 st.sidebar.markdown("---")
+st.sidebar.subheader("🔔 Telegram Alert Control")
+
+# ON / OFF Toggle Switch
+tg_enabled = st.sidebar.toggle("Enable Live Telegram Alerts (ON/OFF)", value=False)
+auto_scan = st.sidebar.toggle("⏱️ Auto-Scan Every 15 Mins", value=False, help="Keeps scanning market every 15 mins and pushes Telegram alerts when ON.")
+
+with st.sidebar.expander("🔑 Telegram Bot Setup", expanded=tg_enabled):
+    # Pre-fills from Streamlit Secrets if configured, else user can enter directly
+    default_token = st.secrets.get("TELEGRAM_BOT_TOKEN", "") if "TELEGRAM_BOT_TOKEN" in st.secrets else ""
+    default_chat = st.secrets.get("TELEGRAM_CHAT_ID", "") if "TELEGRAM_CHAT_ID" in st.secrets else ""
+    
+    tg_token = st.text_input("Telegram Bot Token", value=default_token, type="password", placeholder="Paste Bot Token here...")
+    tg_chat_id = st.text_input("Telegram Chat ID", value=default_chat, placeholder="Paste Chat ID here...")
+
+def send_telegram_alert(message):
+    if not tg_token or not tg_chat_id:
+        return False, "Bot Token or Chat ID missing!"
+    url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
+    payload = {
+        "chat_id": tg_chat_id,
+        "text": message,
+        "parse_mode": "Markdown"
+    }
+    try:
+        r = requests.post(url, json=payload, timeout=8)
+        if r.status_code == 200:
+            return True, "Alert Sent Successfully!"
+        else:
+            return False, f"API Error: {r.text}"
+    except Exception as e:
+        return False, str(e)
+
+st.sidebar.markdown("---")
 st.sidebar.subheader("💰 Capital & Position Sizing")
 user_capital = st.sidebar.number_input("Total Trading Capital (₹ / $)", min_value=10000.0, value=300000.0, step=10000.0)
 risk_pct = st.sidebar.slider("Max Risk Per Trade (%)", min_value=0.5, max_value=5.0, value=1.5, step=0.5)
-
-st.sidebar.markdown("---")
-st.sidebar.info("💡 **Pro Tip:** Hover over the candlestick chart to inspect exact Open, High, Low, Close (OHLC), EMA-20, and SuperTrend levels.")
 
 # ---------------- HELPER FUNCTIONS ----------------
 def calc_rsi(series, period=14):
@@ -75,44 +111,23 @@ def plot_candlestick(df, st_series, title):
     sub_df['EMA20'] = sub_df['Close'].ewm(span=20, adjust=False).mean()
     
     fig = go.Figure()
-    
-    # 1. Candlesticks
     fig.add_trace(go.Candlestick(
-        x=sub_df.index,
-        open=sub_df['Open'],
-        high=sub_df['High'],
-        low=sub_df['Low'],
-        close=sub_df['Close'],
-        name="Price",
-        increasing_line_color='#00ff88',
-        decreasing_line_color='#ff3355'
+        x=sub_df.index, open=sub_df['Open'], high=sub_df['High'],
+        low=sub_df['Low'], close=sub_df['Close'], name="Price",
+        increasing_line_color='#00ff88', decreasing_line_color='#ff3355'
     ))
-    
-    # 2. EMA 20 Line
     fig.add_trace(go.Scatter(
-        x=sub_df.index,
-        y=sub_df['EMA20'],
-        mode='lines',
-        name='EMA 20',
-        line=dict(color='#00bfff', width=1.5)
+        x=sub_df.index, y=sub_df['EMA20'], mode='lines',
+        name='EMA 20', line=dict(color='#00bfff', width=1.5)
     ))
-    
-    # 3. SuperTrend Line
     fig.add_trace(go.Scatter(
-        x=sub_df.index,
-        y=sub_st,
-        mode='lines',
-        name='SuperTrend',
-        line=dict(color='#ffaa00', width=1.8, dash='dot')
+        x=sub_df.index, y=sub_st, mode='lines',
+        name='SuperTrend', line=dict(color='#ffaa00', width=1.8, dash='dot')
     ))
-    
     fig.update_layout(
-        title=dict(text=title, font=dict(size=14)),
-        height=340,
-        margin=dict(l=10, r=10, t=35, b=10),
-        xaxis_rangeslider_visible=False,
-        template="plotly_dark",
-        paper_bgcolor="rgba(0,0,0,0)",
+        title=dict(text=title, font=dict(size=14)), height=340,
+        margin=dict(l=10, r=10, t=35, b=10), xaxis_rangeslider_visible=False,
+        template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(15,18,24,0.85)",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
@@ -158,6 +173,11 @@ def fetch_nifty_pcr(spot_price):
 # ---------------- MAIN DASHBOARD COLUMNS ----------------
 col1, col2 = st.columns(2)
 
+nifty_alert_msg = ""
+btc_alert_msg = ""
+n_signal_status = "MIXED"
+b_signal_status = "MIXED"
+
 # ================= 1. NIFTY 50 TERMINAL =================
 with col1:
     st.subheader("📊 NIFTY 50 PRO TERMINAL")
@@ -190,6 +210,7 @@ with col1:
         suggested_lots = max(1, int(max_risk_amount / risk_per_lot_nifty))
 
         if tf_bull == 3 and n_rsi > 45:
+            n_signal_status = "BULLISH"
             st.success("🔥 **MULTI-TF ALIGNED: STRONG BULLISH | BULL PUT SPREAD**")
             sell_strike = max(sup_oi, atm_n - 350)
             buy_strike = sell_strike - 250
@@ -199,6 +220,7 @@ with col1:
             delta_val = "-0.22 (OTM Put Sell)"
             theta_val = f"+₹{(suggested_lots * 350)} / day (Time Decay Gain)"
         elif tf_bear == 3 and n_rsi < 55:
+            n_signal_status = "BEARISH"
             st.error("🔻 **MULTI-TF ALIGNED: STRONG BEARISH | BEAR CALL SPREAD**")
             sell_strike = min(res_oi, atm_n + 350)
             buy_strike = sell_strike + 250
@@ -211,12 +233,22 @@ with col1:
             st.warning(f"⚠️ **MIXED TIMEFRAMES (1D: {d_trend} | 1H: {h_trend} | 15m: {m_trend})**")
             leg1, leg2, sl, delta_val, theta_val, suggested_lots = "None (No Trade)", "None", "Capital Safe", "0.0", "₹0", 0
 
+        nifty_alert_msg = (
+            f"📊 *SHINE AI — NIFTY 50 SIGNAL*\n"
+            f"• *Status:* {n_signal_status} (1D:{d_trend} | 1H:{h_trend} | 15m:{m_trend})\n"
+            f"• *Spot:* {n_spot:.2f} | *PCR:* {pcr} | *RSI:* {n_rsi:.1f}\n"
+            f"• *Allowed Lots:* {suggested_lots} Lot(s)\n"
+            f"• *Hedge Leg:* `{leg1}`\n"
+            f"• *Main Leg:* `{leg2}`\n"
+            f"• *Stop-Loss:* `{sl}`\n"
+            f"• *Theta Decay:* {theta_val}"
+        )
+
         m1, m2, m3 = st.columns(3)
         m1.metric("Nifty Spot", f"{n_spot:.2f}", f"VIX: {n_vix:.2f}")
         m2.metric("Option Chain PCR", f"{pcr}", f"RSI: {n_rsi:.1f}")
         m3.metric("Allowed Lots", f"{suggested_lots} Lot(s)", f"Risk: {risk_pct}%")
 
-        # Live Candlestick Chart
         intra_n_plot = intra_n.copy()
         intra_n_plot.index = intra_n_plot.index.strftime('%d %b %H:%M')
         n_st_series.index = intra_n_plot.index
@@ -270,6 +302,7 @@ with col2:
         btc_lots = max(1, int((user_capital * (risk_pct / 100.0)) / 15000.0))
 
         if btf_bull == 3:
+            b_signal_status = "BULLISH"
             st.success("🔥 **MULTI-TF ALIGNED: STRONG BULLISH | BULL PUT SPREAD**")
             sell_p = atm_b - 600
             buy_p = sell_p - 1000
@@ -279,6 +312,7 @@ with col2:
             b_delta = "-0.25 (OTM Put Sell)"
             b_theta = f"+${btc_lots * 25} / day (Theta Earning)"
         elif btf_bear == 3:
+            b_signal_status = "BEARISH"
             st.error("🔻 **MULTI-TF ALIGNED: STRONG BEARISH | BEAR CALL SPREAD**")
             sell_c = atm_b + 600
             buy_c = sell_c + 1000
@@ -291,12 +325,21 @@ with col2:
             st.warning(f"⚠️ **MIXED TIMEFRAMES (1D: {bd_trend} | 1H: {bh_trend} | 15m: {bm_trend})**")
             b_leg1, b_leg2, b_sl, b_delta, b_theta, btc_lots = "None (No Trade)", "None", "None", "0.0", "$0", 0
 
+        btc_alert_msg = (
+            f"🪙 *SHINE AI — BITCOIN SIGNAL*\n"
+            f"• *Status:* {b_signal_status} (1D:{bd_trend} | 1H:{bh_trend} | 15m:{bm_trend})\n"
+            f"• *Spot:* ${b_spot:,.2f} | *RSI:* {b_rsi:.1f}\n"
+            f"• *Sizing:* {btc_lots} Unit(s)\n"
+            f"• *Hedge Leg:* `{b_leg1}`\n"
+            f"• *Main Leg:* `{b_leg2}`\n"
+            f"• *Stop-Loss:* `{b_sl}`"
+        )
+
         bm1, bm2, bm3 = st.columns(3)
         bm1.metric("BTC Spot Price", f"${b_spot:,.2f}", f"ATR: ${b_atr:.1f}")
         bm2.metric("15m RSI", f"{b_rsi:.1f}", f"SuperTrend: {bm_trend}")
         bm3.metric("BTC Sizing", f"{btc_lots} Unit(s)", f"Sync: {max(btf_bull, btf_bear)}/3")
 
-        # Live Candlestick Chart for BTC
         intra_b_plot = intra_b.copy()
         intra_b_plot.index = intra_b_plot.index.strftime('%d %b %H:%M')
         b_st_series.index = intra_b_plot.index
@@ -323,5 +366,34 @@ with col2:
     except Exception as e:
         st.error(f"BTC Terminal Error: {e}")
 
+# ---------------- TELEGRAM DISPATCH ENGINE ----------------
+if tg_enabled:
+    st.sidebar.success("🟢 Telegram Alerts: ACTIVE")
+    combined_msg = f"🚀 *SHINE AI DESK v6.0 LIVE REPORT*\n\n{nifty_alert_msg}\n\n{btc_alert_msg}\n\n⏱️ _Time: {datetime.now().strftime('%d %b %H:%M:%S')}_"
+    
+    # 1. Manual Instant Push Button
+    if st.sidebar.button("📲 Send Instant Telegram Snapshot", use_container_width=True):
+        ok, info = send_telegram_alert(combined_msg)
+        if ok:
+            st.sidebar.toast("✅ Telegram Alert Sent!")
+            st.sidebar.success(info)
+        else:
+            st.sidebar.error(info)
+            
+    # 2. Automatic Push on Aligned Signal
+    curr_sig_key = f"{n_signal_status}_{b_signal_status}"
+    if (n_signal_status != "MIXED" or b_signal_status != "MIXED") and st.session_state.last_alert_sig != curr_sig_key:
+        ok, info = send_telegram_alert(combined_msg)
+        if ok:
+            st.session_state.last_alert_sig = curr_sig_key
+            st.sidebar.info("📨 Auto-Alert Dispatched to Telegram!")
+else:
+    st.sidebar.warning("🔴 Telegram Alerts: OFF")
+
 st.markdown("---")
-st.caption(f"Shine AI Pro Desk v5.0 | Institutional Candlestick & Greeks Terminal | Last Synced: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption(f"Shine AI Pro Desk v6.0 | Institutional Candlestick, Greeks & Telegram Terminal | Last Synced: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+# Auto-Scan Loop when enabled
+if auto_scan:
+    time.sleep(900) # 15 minutes (900 seconds)
+    st.rerun()

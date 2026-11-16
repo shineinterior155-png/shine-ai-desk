@@ -267,3 +267,16 @@ with col2:
 
 st.markdown("---")
 st.caption(f"Shine AI Pro Desk v4.0 | Institutional Position Sizing & Greeks Terminal | Last Synced: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+import streamlit as st
+import pandas as pd
+import numpy as np
+import yfinance as yf
+import altair as alt
+from datetime import datetime
+
+st.set_page_config(page_title="Shine AI Institutional Trading Desk v4.1", page_icon="🚀", layout="wide")
+
+st.title("🚀 SHINE AI Institutional Trading Desk v4.1")
+st.markdown("Multi-TF Matrix, Option Selling Strikes, Position Sizing & Greeks Tracker")
+
+st.sidebar.header

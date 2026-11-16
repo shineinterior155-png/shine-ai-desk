@@ -4,3 +4,4 @@ pandas
 numpy
 curl_cffi
 plotly
+requests

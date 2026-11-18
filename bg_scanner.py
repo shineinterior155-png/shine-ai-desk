@@ -6,7 +6,7 @@ import yfinance as yf
 import requests
 from datetime import datetime, timedelta, timezone
 
-TG_TOKEN = "9032117445:AAEerBt_kqwXr-A8j1xmaQXmfnyp-08i1-A"
+TG_TOKEN = "9032117445:AAEerBt_kqWXr-A8j1xmaQXmfnyp-O8i1-A"
 TG_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "8085621728").strip()
 
 def calc_rsi(series, period=14):

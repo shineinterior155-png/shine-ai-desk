@@ -1,0 +1,30 @@
+name: Shine BTC Delta 24x7 Auto Trader
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'   # Har 15 minute mein apne aap chalega
+  workflow_dispatch:         # Manual test button ke liye
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: pip install requests
+
+      - name: Run Shine BTC Option Bot
+        env:
+          GITHUB_ACTIONS: "true"
+          DELTA_API_KEY: ${{ secrets.DELTA_API_KEY }}
+          DELTA_API_SECRET: ${{ secrets.DELTA_API_SECRET }}
+          SHINE_TELEGRAM_BOT_TOKEN: ${{ secrets.SHINE_TELEGRAM_BOT_TOKEN }}
+          SHINE_TELEGRAM_CHAT_ID: ${{ secrets.SHINE_TELEGRAM_CHAT_ID }}
+        run: python shine_btc_options_v7_0.py

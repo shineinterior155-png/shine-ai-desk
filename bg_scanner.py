@@ -1,12 +1,13 @@
 import os
+import sys
 import pandas as pd
 import numpy as np
 import yfinance as yf
 import requests
 from datetime import datetime, timedelta, timezone
 
-TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TG_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "8085621728")
+TG_TOKEN = os.environ.get("9032117445:AAEerBt_kqWXr-A8j1xmaQXmfnyp-O8i1-A", "").strip()
+TG_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "8085621728").strip()
 
 def calc_rsi(series, period=14):
     delta = series.diff()
@@ -48,6 +49,10 @@ def calc_supertrend(df, period=10, multiplier=3):
     return ("BULLISH" if st_dir[-1] else "BEARISH"), float(atr.iloc[-1])
 
 def run_scan():
+    if not TG_TOKEN:
+        print("❌ ERROR: TELEGRAM_BOT_TOKEN is empty! Check Secret name in Settings.")
+        sys.exit(1)
+
     # 1. NIFTY SCAN
     daily_n = yf.download("^NSEI", period="6mo", interval="1d", progress=False)
     hourly_n = yf.download("^NSEI", period="1mo", interval="1h", progress=False)
@@ -71,16 +76,17 @@ def run_scan():
     step_dist = max(200, int(round((n_atr * 3.5) / 50.0) * 50))
     sup_oi, res_oi = atm_n - step_dist, atm_n + step_dist
 
-    if h_trend == "BULLISH" and m_trend == "BULLISH" and n_rsi > 45:
-        n_status = "BULLISH"
+    # Fast 15m Intraday Trigger (No waiting for lagging 1H to flip)
+    if m_trend == "BULLISH" and n_rsi >= 45:
+        n_status = "BULLISH (Strong 1H+15m)" if h_trend == "BULLISH" else "BULLISH (15m Intraday Entry)"
         sell_s = max(sup_oi, atm_n - 300)
         leg1, leg2, sl = f"BUY NIFTY {sell_s - 250} PE", f"SELL NIFTY {sell_s} PE", f"Below {sell_s - 30}"
-    elif h_trend == "BEARISH" and m_trend == "BEARISH" and n_rsi < 55:
-        n_status = "BEARISH"
+    elif m_trend == "BEARISH" and n_rsi <= 55:
+        n_status = "BEARISH (Strong 1H+15m)" if h_trend == "BEARISH" else "BEARISH (15m Intraday Entry)"
         sell_s = min(res_oi, atm_n + 300)
         leg1, leg2, sl = f"BUY NIFTY {sell_s + 250} CE", f"SELL NIFTY {sell_s} CE", f"Above {sell_s + 30}"
     else:
-        n_status, leg1, leg2, sl = "WAIT / NO TRADE", "None", "None", "Capital Safe"
+        n_status, leg1, leg2, sl = "WAIT / SIDEWAYS", "None", "None", "Capital Safe"
 
     # 2. BTC SCAN
     daily_b = yf.download("BTC-USD", period="6mo", interval="1d", progress=False)
@@ -97,37 +103,39 @@ def run_scan():
     b_rsi = float(calc_rsi(intra_b['Close']).iloc[-1])
     atm_b = int(round(b_spot / 200.0) * 200)
 
-    if bh_trend == "BULLISH" and bm_trend == "BULLISH":
-        b_status = "BULLISH"
+    if bm_trend == "BULLISH":
+        b_status = "BULLISH (Strong 1H+15m)" if bh_trend == "BULLISH" else "BULLISH (15m Intraday)"
         b_leg1, b_leg2 = f"BUY BTC PUT ${atm_b - 1600}", f"SELL BTC PUT ${atm_b - 600}"
-    elif bh_trend == "BEARISH" and bm_trend == "BEARISH":
-        b_status = "BEARISH"
-        b_leg1, b_leg2 = f"BUY BTC CALL ${atm_b + 1600}", f"SELL BTC CALL ${atm_b + 600}"
     else:
-        b_status, b_leg1, b_leg2 = "WAIT / NO TRADE", "None", "None"
+        b_status = "BEARISH (Strong 1H+15m)" if bh_trend == "BEARISH" else "BEARISH (15m Intraday)"
+        b_leg1, b_leg2 = f"BUY BTC CALL ${atm_b + 1600}", f"SELL BTC CALL ${atm_b + 600}"
 
     ist_now = datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime('%d %b %H:%M IST')
     
-    # Send alert if either Nifty or BTC has an active setup
-    if n_status != "WAIT / NO TRADE" or b_status != "WAIT / NO TRADE":
-        msg = (
-            f"⚡ *SHINE AI — 24/7 BACKGROUND AUTO-ALERT*\n\n"
-            f"📊 *NIFTY 50:* {n_status} (1D:{d_trend} | 1H:{h_trend} | 15m:{m_trend})\n"
-            f"• *Spot:* {n_spot:.2f} | *PCR:* {pcr} | *RSI:* {n_rsi:.1f}\n"
-            f"• *Hedge:* `{leg1}`\n"
-            f"• *Main Sell:* `{leg2}` | *SL:* `{sl}`\n\n"
-            f"🪙 *BITCOIN:* {b_status} (1D:{bd_trend} | 1H:{bh_trend} | 15m:{bm_trend})\n"
-            f"• *Spot:* ${b_spot:,.2f} | *RSI:* {b_rsi:.1f}\n"
-            f"• *Hedge:* `{b_leg1}`\n"
-            f"• *Main Sell:* `{b_leg2}`\n\n"
-            f"⏱️ _{ist_now}_"
-        )
-        if TG_TOKEN:
-            requests.post(
-                f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-                json={"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "Markdown"},
-                timeout=10
-            )
+    msg = (
+        f"⚡ *SHINE AI — 24/7 BACKGROUND AUTO-ALERT*\n\n"
+        f"📊 *NIFTY 50:* {n_status}\n"
+        f"• *Matrix:* 1D:{d_trend} | 1H:{h_trend} | 15m:{m_trend}\n"
+        f"• *Spot:* {n_spot:.2f} | *PCR:* {pcr} | *RSI:* {n_rsi:.1f}\n"
+        f"• *Hedge:* `{leg1}`\n"
+        f"• *Main Sell:* `{leg2}` | *SL:* `{sl}`\n\n"
+        f"🪙 *BITCOIN:* {b_status}\n"
+        f"• *Matrix:* 1D:{bd_trend} | 1H:{bh_trend} | 15m:{bm_trend}\n"
+        f"• *Spot:* ${b_spot:,.2f} | *RSI:* {b_rsi:.1f}\n"
+        f"• *Hedge:* `{b_leg1}`\n"
+        f"• *Main Sell:* `{b_leg2}`\n\n"
+        f"⏱️ _{ist_now}_"
+    )
+    
+    r = requests.post(
+        f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+        json={"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "Markdown"},
+        timeout=10
+    )
+    if r.status_code != 200:
+        print(f"❌ Telegram API Error: {r.text}")
+        sys.exit(1)
+    print("✅ Alert Dispatched Successfully!")
 
 if __name__ == "__main__":
     run_scan()
